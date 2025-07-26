@@ -7,8 +7,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const module = b.addModule(.{
-        .name = NAME,
+    const module = b.addModule(NAME, .{
         .root_source_file = b.path(SOURCE),
         .target = target,
         .optimize = optimize,
