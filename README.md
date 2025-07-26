@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) !void {
 }
 ```
 
-### Decode RGBA png image(s)
+### Decode an RGBA png image
 ```zig
 const rgbapng = @import("rgbapng");
 
@@ -46,6 +46,7 @@ pub fn main() !void {
 }
 ```
 
+### Decode many RGBA png images, deallocate at end with arena.
 ```zig
 const rgbapng = @import("rgbapng");
 const PngDecodeError = rgbapng.PngDecodeError;
@@ -69,8 +70,8 @@ pub fn main() PngDecodeError!void {
     for (IMAGE_PATHS, &images) |image_path, *image| {
         image.* = try decode(
             PngDecodeConfig{
-                .optimistic = true, // Forgoe crc checks, header validation and runtime safety checks.
-                .timing = true, // Print how long different decoding steps take.
+                .optimistic = true,          // Forgo crc checks, header validation and runtime safety checks.
+                .timing = true,              // Print how long different decoding steps take.
                 .compressed_image_bytes = 0, // Not needed, but can be set to nonzero value if known.
             },
             image_path,
