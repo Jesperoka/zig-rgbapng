@@ -23,10 +23,6 @@ pub const Image = struct {
     width: u32,
     height: u32,
     stride: u32,
-
-    pub fn deinit(self: *Image, allocator: Allocator) void {
-        allocator.free(self.data);
-    }
 };
 
 // It would be nicer if we had arrays in packed structs/unions. But we don't yet.
@@ -283,7 +279,6 @@ const PngReconstructionError = error{ InvalidFilterType, PathologicalImageNotSup
 //          as long as the previous row is already unfiltered.
 
 fn unfilter_image(
-    comptime optimistic: bool,
     filtered_data: []u8,
     pixel_width: u32,
     pixel_height: u32,
@@ -291,9 +286,6 @@ fn unfilter_image(
     const int_type = i32;
     const image_byte_width = pixel_width * BYTES_PER_PIXEL;
     const scanline_width = image_byte_width + 1;
-
-    if (comptime optimistic) @setRuntimeSafety(false);
-    defer if (comptime optimistic) @setRuntimeSafety(true);
 
     for (0..pixel_height) |row_index| {
         const filter_type: PngFilterType = @enumFromInt(filtered_data[row_index * scanline_width]);
@@ -362,9 +354,12 @@ pub const PngDecodeError = error{
 } || OpenError || FileReadError || SeekError || PngSignatureError || PngHeaderError || PngChunkError || PngDecompressionError || PngReconstructionError;
 
 pub const PngDecodeConfig = struct {
-    compression_factor_lower_bound: u16 = 1, // No compression.
-    // no_allocations: bool = false,
+    /// If true forgoes crc checks, header validation and runtime safety checks.
     optimistic: bool = false,
+    /// If true prints timing information about the decode process.
+    timing: bool = false,
+    /// Optional. Specify if you happen to know exactly how large the compressed image data is.
+    compressed_image_bytes: u64 = 0,
 };
 
 pub fn decode(
@@ -372,21 +367,25 @@ pub fn decode(
     filename: []const u8,
     allocator: Allocator,
 ) PngDecodeError!Image {
-    comptime std.debug.assert(config.compression_factor_lower_bound < 1032);
+    if (comptime config.optimistic) @setRuntimeSafety(false);
+    defer if (comptime config.optimistic) @setRuntimeSafety(true);
 
-    // const t0 = Instant.now() catch unreachable;
+    const t0 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
+
     const png_file = try fs.cwd().openFile(filename, .{});
     defer png_file.close();
 
-    // const t1 = Instant.now() catch unreachable;
+    const t1 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
+
     const signature = try PngSignature.from_file(png_file);
     try signature.validate(config.optimistic);
 
-    // const t2 = Instant.now() catch unreachable;
+    const t2 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
+
     const header = try PngHeader.from_file(png_file);
     try header.validate(config.optimistic);
 
-    // const t3 = Instant.now() catch unreachable;
+    const t3 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
 
     const decompressed_image_size: usize = ( //
         header.fields.width.native_endian() * header.fields.height.native_endian() * BYTES_PER_PIXEL //
@@ -394,20 +393,20 @@ pub fn decode(
     );
 
     // This overallocates a bit, but I don't know if we can do better before parsing chunks.
-    const upper_bound_compressed_image_size = ( //
+    const upper_bound_compressed_image_size = if (!(config.compressed_image_bytes > 0)) ( //
         (try png_file.metadata()).size() //
         - @bitSizeOf(PngSignature) / 8 - @bitSizeOf(PngHeader) / 8 //
         - 3 * @sizeOf(PngChunkType) //
-    );
+    ) else config.compressed_image_bytes;
 
-    // const t4 = Instant.now() catch unreachable;
+    const t4 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
 
     const work_buffer = try allocator.alignedAlloc(u8, BYTES_PER_PIXEL, decompressed_image_size + upper_bound_compressed_image_size);
 
     var actual_compressed_image_size: usize = 0;
     var previous_data_chunk_index: usize = decompressed_image_size;
 
-    // const t5 = Instant.now() catch unreachable;
+    const t5 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
 
     chunk_read_loop: while (true) {
         var png_chunk: PngChunk = undefined;
@@ -439,34 +438,34 @@ pub fn decode(
     }
     actual_compressed_image_size = previous_data_chunk_index - decompressed_image_size;
 
-    // const t6 = Instant.now() catch unreachable;
+    const t6 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
 
     try decompress_image_data(
         work_buffer[decompressed_image_size .. decompressed_image_size + actual_compressed_image_size],
         work_buffer[0..decompressed_image_size],
     );
 
-    // const t7 = Instant.now() catch unreachable;
+    const t7 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
 
     try unfilter_image(
-        config.optimistic,
         work_buffer[0..decompressed_image_size],
         header.fields.width.native_endian(),
         header.fields.height.native_endian(),
     );
 
-    // const t8 = Instant.now() catch unreachable;
+    const t8 = if (comptime config.timing) Instant.now() catch unreachable else undefined;
 
-    // TODO: Print stats about which parts of the process takes how long.
-    // std.debug.print("Diff: {d} bytes\n", .{@as(i64, @intCast(actual_compressed_image_size)) - @as(i64, @intCast(upper_bound_compressed_image_size))});
-    // std.debug.print("PNG signature read took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t1.since(t0)))});
-    // std.debug.print("PNG header read took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t2.since(t1)))});
-    // std.debug.print("PNG header validated took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t3.since(t2)))});
-    // std.debug.print("PNG allocate work buffer took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t5.since(t4)))});
-    // std.debug.print("PNG read chunks took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t6.since(t5)))});
-    // std.debug.print("PNG decompress image data took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t7.since(t6)))});
-    // std.debug.print("PNG unfilter image took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t8.since(t7)))});
-    // std.debug.print("PNG total decode took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t8.since(t0)))});
+    if (comptime config.timing) {
+        std.debug.print("Diff: {d} bytes\n", .{@as(i64, @intCast(actual_compressed_image_size)) - @as(i64, @intCast(upper_bound_compressed_image_size))});
+        std.debug.print("PNG signature read took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t1.since(t0)))});
+        std.debug.print("PNG header read took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t2.since(t1)))});
+        std.debug.print("PNG header validated took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t3.since(t2)))});
+        std.debug.print("PNG allocate work buffer took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t5.since(t4)))});
+        std.debug.print("PNG read chunks took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t6.since(t5)))});
+        std.debug.print("PNG decompress image data took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t7.since(t6)))});
+        std.debug.print("PNG unfilter image took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t8.since(t7)))});
+        std.debug.print("PNG total decode took: {d:.3} ms\n", .{1e-6 * @as(f64, @floatFromInt(t8.since(t0)))});
+    }
 
     if (!allocator.resize(work_buffer, decompressed_image_size)) {
         if (!config.optimistic) {
