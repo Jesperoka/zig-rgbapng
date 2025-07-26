@@ -17,14 +17,14 @@ const SUPPORTED_NUMBER_OF_CHANNELS = 4;
 const BYTES_PER_PIXEL = 4;
 const PNG_HEADER_DATA_LENGTH = 13;
 
-// This is the output image after decoding.
-pub const PngImage = struct {
+/// This is the output image after decoding.
+pub const Image = struct {
     data: []u8,
     width: u32,
     height: u32,
     stride: u32,
 
-    pub fn deinit(self: *PngImage, allocator: Allocator) void {
+    pub fn deinit(self: *Image, allocator: Allocator) void {
         allocator.free(self.data);
     }
 };
@@ -56,7 +56,7 @@ const PngCompressionMethod = enum(u8) { DEFLATE = 0 };
 const PngFilterMethod = enum(u8) { ADAPTIVE = 0 };
 const PngInterlaceMethod = enum(u8) { NONE = 0, ADAM7 = 1 };
 
-pub const PngSignatureError = error{
+const PngSignatureError = error{
     InvalidSignature,
 };
 
@@ -94,7 +94,7 @@ const PngChunkType = enum(u32) {
     }
 };
 
-pub const PngChunkError = error{
+const PngChunkError = error{
     CrcCheckFailed,
     DataBufferTooSmall,
 } || FileReadError || AllocatorError || SeekError;
@@ -147,7 +147,7 @@ fn cyclic_redundancy_check(
     }
 }
 
-pub const PngHeaderError = error{
+const PngHeaderError = error{
     InvalidHeaderFormat,
     UnsupportedColorType,
     UnsupportedBitDepth,
@@ -217,7 +217,7 @@ const PngHeader = packed struct(HeaderBackingInt) {
     }
 };
 
-pub const FileReadError = error{
+const FileReadError = error{
     EndOfStream,
 } || ReadError;
 
@@ -229,7 +229,7 @@ fn read_into(file: fs.File, buffer: []u8) FileReadError!void {
     }
 }
 
-pub const PngDecompressionError = error{
+const PngDecompressionError = error{
     CouldNotReadAll,
 } || DecompressionReadError || AllocatorError;
 
@@ -282,7 +282,7 @@ const PngReconstructionError = error{ InvalidFilterType, PathologicalImageNotSup
 //          - The first 4 bytes (1 pixel) of each row can be done in parallel if they use UP, AVERAGE or PAETH,
 //          as long as the previous row is already unfiltered.
 
-pub fn unfilter_image(
+fn unfilter_image(
     comptime optimistic: bool,
     filtered_data: []u8,
     pixel_width: u32,
@@ -371,7 +371,7 @@ pub fn decode(
     comptime config: PngDecodeConfig,
     filename: []const u8,
     allocator: Allocator,
-) PngDecodeError!PngImage {
+) PngDecodeError!Image {
     comptime std.debug.assert(config.compression_factor_lower_bound < 1032);
 
     // const t0 = Instant.now() catch unreachable;
@@ -472,14 +472,14 @@ pub fn decode(
         if (!config.optimistic) {
             std.debug.print("Passed allocator does not support resize, returning full buffer with work data still included.", .{});
         }
-        return PngImage{
+        return Image{
             .data = work_buffer,
             .width = header.fields.width.native_endian(),
             .height = header.fields.height.native_endian(),
             .stride = header.fields.width.native_endian() * BYTES_PER_PIXEL,
         };
     } else {
-        return PngImage{
+        return Image{
             .data = work_buffer[0..decompressed_image_size],
             .width = header.fields.width.native_endian(),
             .height = header.fields.height.native_endian(),
